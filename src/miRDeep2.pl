@@ -24,7 +24,7 @@ use Getopt::Std;
 use Cwd;
 use File::Copy;
 use File::Path;
-use File::Basename;
+use File::Basename qw(basename dirname);
 use Term::ANSIColor;
 use Cwd qw(abs_path);
 
@@ -217,11 +217,13 @@ Either specify a valid fasta file or say none\n\n$warning";}
 
 my %options=();
 
-getopts("a:b:cdt:uvq:s:z:r:p:g:EP",\%options);
+getopts("a:b:cdt:uvq:s:z:r:p:g:EP:t",\%options);
 
 my $max_pres=50000;
 $max_pres=$options{'g'} if(defined $options{'g'});
 
+my $cpu=$options{'t'};
+$cpu=2 if(!defined $cpu);
 ## minimal precursor length, used for precheck of precursor file
 my $minpreslen=40;
 if($options{'p'}){
@@ -732,16 +734,16 @@ sub fold_precursors{
     print STDERR "#folding precursors\n";
 
     start();
-	my $ret_fold_precursors=system("RNAfold < $dir_tmp/precursors.fa -noPS > $dir_tmp/precursors.str 2>>error_${time}.log");
+	my $ret_fold_precursors=system("RNAfold < $dir_tmp/precursors.fa --jobs=$cpu --noPS > $dir_tmp/precursors.str 2>>error_${time}.log");
 	if($ret_fold_precursors){
-		$ret_fold_precursors=system("RNAfold < $dir_tmp/precursors.fa --noPS > $dir_tmp/precursors.str");
+		$ret_fold_precursors=system("RNAfold < $dir_tmp/precursors.fa --jobs=$cpu --noPS > $dir_tmp/precursors.str");
 		if($ret_fold_precursors){
 			die "Some RNAfold error occurred. Error $ret_fold_precursors\n";
 		}else{
-		    print STDERR "RNAfold < $dir_tmp/precursors.fa --noPS > $dir_tmp/precursors.str\n\n";
+		    print STDERR "RNAfold < $dir_tmp/precursors.fa --jobs=$cpu --noPS > $dir_tmp/precursors.str\n\n";
 		}
 	}else{
-	    print STDERR "RNAfold < $dir_tmp/precursors.fa -noPS > $dir_tmp/precursors.str\n\n";
+	    print STDERR "RNAfold < $dir_tmp/precursors.fa --jobs=$cpu --noPS > $dir_tmp/precursors.str\n\n";
 	}
 
     end();
@@ -767,8 +769,26 @@ sub compute_randfold{
     my $ret_fasta_select=`fastaselect.pl $dir_tmp/precursors.fa $dir_tmp/precursors_for_randfold.ids > $dir_tmp/precursors_for_randfold.fa`;
     end();
     start();
-    print STDERR "randfold -s $dir_tmp/precursors_for_randfold.fa 99 > $dir_tmp/precursors_for_randfold.rand\n\n";
-    my $ret_randfold=`randfold -s $dir_tmp/precursors_for_randfold.fa 99 > $dir_tmp/precursors_for_randfold.rand`;
+
+    #print STDERR "randfold -s $dir_tmp/precursors_for_randfold.fa 99 > $dir_tmp/precursors_for_randfold.rand\n\n";
+    #my $ret_randfold=`randfold -s $dir_tmp/precursors_for_randfold.fa 99 > $dir_tmp/precursors_for_randfold.rand`;
+
+   mkdir "$dir_tmp/randfoldSepIn";
+   mkdir "$dir_tmp/randfoldSepOut";
+
+   `split -d -a 3 -l 1000 $dir_tmp/precursors_for_randfold.fa  $dir_tmp/randfoldSepIn/sep`;
+   my @l=glob("$dir_tmp/randfoldSepIn/sep*");
+   open BATRANDFFOLD,">$dir_tmp/randfoldbatch.sh" or die $!;
+   foreach my $l(@l){
+      next if($l=~/\.rand$/);
+      my $name=basename($l);
+      print BATRANDFFOLD "randfold -s $l 99 > $dir_tmp/randfoldSepOut/$name.rand \n";
+   }
+   close BATRANDFFOLD;
+
+   `cat $dir_tmp/randfoldbatch.sh|parallel -j $cpu`;
+   `cat $dir_tmp/randfoldSepOut/*.rand >$dir_tmp/precursors_for_randfold.rand`;
+
     end();
     return;
 }
